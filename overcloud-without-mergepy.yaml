@@ -15,6 +15,11 @@ parameters:
     description: The password for the keystone admin account, used for monitoring, querying neutron etc.
     type: string
     hidden: true
+  AodhPassword:
+    default: unset
+    description: The password for the aodh services
+    type: string
+    hidden: true
   CeilometerBackend:
     default: 'mongodb'
     description: The ceilometer backend type.
@@ -113,6 +118,10 @@ parameters:
     default: ''
     type: string
     description: Neutron ID for ctlplane network.
+  NeutronEnableForceMetadata:
+    default: 'False'
+    description: If True, DHCP always provides metadata route to VM.
+    type: string
   NeutronEnableTunnelling:
     type: string
     default: "True"
@@ -231,6 +240,10 @@ parameters:
     default: 8081
     description: Set opendaylight service port
     type: number
+  OpenDaylightEnableL3:
+    description: Knob to enable/disable ODL L3
+    type: string
+    default: 'no'
   OpenDaylightInstall:
     default: false
     description: Whether to install OpenDaylight on the control nodes.
@@ -592,6 +605,7 @@ parameters:
     default:
       NeutronTenantNetwork: tenant
       CeilometerApiNetwork: internal_api
+      AodhApiNetwork: internal_api
       MongoDbNetwork: internal_api
       CinderApiNetwork: internal_api
       CinderIscsiNetwork: storage
@@ -791,6 +805,7 @@ resources:
     properties:
       CloudName: {get_param: CloudName}
       CeilometerApiVirtualIP: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, CeilometerApiNetwork]}]}
+      AodhApiVirtualIP: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, AodhApiNetwork]}]}
       CinderApiVirtualIP: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, CinderApiNetwork]}]}
       GlanceApiVirtualIP: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, GlanceApiNetwork]}]}
       GlanceRegistryVirtualIP: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, GlanceRegistryNetwork]}]}
@@ -818,6 +833,7 @@ resources:
           OpenDaylightPort: {get_param: OpenDaylightPort}
           OpenDaylightUsername: {get_param: OpenDaylightUsername}
           OpenDaylightPassword: {get_param: OpenDaylightPassword}
+          OpenDaylightEnableL3: {get_param: OpenDaylightEnableL3}
           OpenDaylightHostname:
             str_replace:
               template: {get_param: OpenDaylightHostnameFormat}
@@ -835,6 +851,7 @@ resources:
         properties:
           AdminPassword: {get_param: AdminPassword}
           AdminToken: {get_param: AdminToken}
+          AodhPassword: {get_param: AodhPassword}
           CeilometerBackend: {get_param: CeilometerBackend}
           CeilometerMeteringSecret: {get_param: CeilometerMeteringSecret}
           CeilometerPassword: {get_param: CeilometerPassword}
@@ -886,6 +903,7 @@ resources:
           NeutronBridgeMappings: {get_param: NeutronBridgeMappings}
           NeutronExternalNetworkBridge: {get_param: NeutronExternalNetworkBridge}
           NeutronEnableTunnelling: {get_param: NeutronEnableTunnelling}
+          NeutronEnableForceMetadata: {get_param: NeutronEnableForceMetadata}
           NeutronNetworkVLANRanges: {get_param: NeutronNetworkVLANRanges}
           NeutronPublicInterface: {get_param: NeutronPublicInterface}
           NeutronPublicInterfaceDefaultRoute: {get_param: NeutronPublicInterfaceDefaultRoute}
@@ -911,6 +929,7 @@ resources:
           OpenDaylightInstall: {get_param: OpenDaylightInstall}
           OpenDaylightUsername: {get_param: OpenDaylightUsername}
           OpenDaylightPassword: {get_param: OpenDaylightPassword}
+          OpenDaylightEnableL3: {get_param: OpenDaylightEnableL3}
           PcsdPassword: {get_resource: PcsdPassword}
           PublicVirtualInterface: {get_param: PublicVirtualInterface}
           RabbitPassword: {get_param: RabbitPassword}
@@ -936,6 +955,7 @@ resources:
           ServiceNetMap: {get_param: ServiceNetMap}
           EndpointMap: {get_attr: [EndpointMap, endpoint_map]}
           CeilometerApiVirtualIP: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, CeilometerApiNetwork]}]}
+          AodhApiVirtualIP: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, AodhApiNetwork]}]}
           CinderApiVirtualIP: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, CinderApiNetwork]}]}
           HeatApiVirtualIP: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, HeatApiNetwork]}]}
           GlanceApiVirtualIP: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, GlanceApiNetwork]}]}
@@ -1143,6 +1163,7 @@ resources:
       heat_api_node_ips: {get_attr: [ControllerIpListMap, net_ip_map, {get_param: [ServiceNetMap, HeatApiNetwork]}]}
       swift_proxy_node_ips: {get_attr: [ControllerIpListMap, net_ip_map, {get_param: [ServiceNetMap, SwiftProxyNetwork]}]}
       ceilometer_api_node_ips: {get_attr: [ControllerIpListMap, net_ip_map, {get_param: [ServiceNetMap, CeilometerApiNetwork]}]}
+      aodh_api_node_ips: {get_attr: [ControllerIpListMap, net_ip_map, {get_param: [ServiceNetMap, AodhApiNetwork]}]}
       nova_api_node_ips: {get_attr: [ControllerIpListMap, net_ip_map, {get_param: [ServiceNetMap, NovaApiNetwork]}]}
       nova_metadata_node_ips: {get_attr: [ControllerIpListMap, net_ip_map, {get_param: [ServiceNetMap, NovaMetadataNetwork]}]}
       glance_api_node_ips: {get_attr: [ControllerIpListMap, net_ip_map, {get_param: [ServiceNetMap, GlanceApiNetwork]}]}
@@ -1251,6 +1272,7 @@ resources:
         nova_api_vip: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, NovaApiNetwork]}]}
         nova_metadata_vip: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, NovaMetadataNetwork]}]}
         ceilometer_api_vip: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, CeilometerApiNetwork]}]}
+        aodh_api_vip: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, AodhApiNetwork]}]}
         heat_api_vip: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, HeatApiNetwork]}]}
         horizon_vip: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, HorizonNetwork]}]}
         redis_vip: {get_attr: [RedisVirtualIP, ip_address]}
@@ -1496,6 +1518,9 @@ outputs:
   PublicVip:
     description: Controller VIP for public API endpoints
     value: {get_attr: [PublicVirtualIP, ip_address]}
+  AodhInternalVip:
+    description: VIP for Aodh API internal endpoint
+    value: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, AodhApiNetwork]}]}
   CeilometerInternalVip:
     description: VIP for Ceilometer API internal endpoint
     value: {get_attr: [VipMap, net_ip_map, {get_param: [ServiceNetMap, CeilometerApiNetwork]}]}

@@ -384,6 +384,7 @@ if hiera('step') >= 2 {
     class {"opendaylight":
       extra_features => ['odl-ovsdb-openstack'],
       odl_rest_port  => hiera('opendaylight_port'),
+      enable_l3      => hiera('opendaylight_enable_l3', 'no'),
     }
   }
 
@@ -659,9 +660,11 @@ if hiera('step') >= 3 {
         odl_password      => hiera('opendaylight_password'),
       }
     }
-    class { '::neutron::agents::l3' :
-      manage_service => false,
-      enabled        => false,
+    if ! str2bool(hiera('opendaylight_enable_l3', 'no')) {
+      class { '::neutron::agents::l3' :
+        manage_service => false,
+        enabled        => false,
+      }
     }
   } elsif 'onos_ml2' in hiera('neutron_mechanism_drivers') {
     #config ml2_conf.ini with onos url address
@@ -710,7 +713,11 @@ if hiera('step') >= 3 {
   if hiera('neutron_enable_bigswitch_ml2', false) {
     include ::neutron::plugins::ml2::bigswitch::restproxy
   }
+<<<<<<< HEAD
+  if !('onos_ml2' in hiera('neutron_mechanism_drivers') or str2bool(hiera('opendaylight_enable_l3', 'no'))) {
+=======
   if !('onos_ml2' in hiera('neutron_mechanism_drivers')) {
+>>>>>>> 0fd1575... Adds current opnfv patch with ODL and ONOS support
     neutron_l3_agent_config {
       'DEFAULT/ovs_use_veth': value => hiera('neutron_ovs_use_veth', false);
     }
@@ -942,6 +949,33 @@ if hiera('step') >= 3 {
     enabled        => false,
   }
   class { '::heat::engine' :
+    manage_service => false,
+    enabled        => false,
+  }
+
+  # Aodh
+  include ::aodh
+  include ::aodh::config
+  include ::aodh::auth
+  include ::aodh::client
+  include ::aodh::wsgi::apache
+  class { '::aodh::api':
+    manage_service => false,
+    enabled        => false,
+    service_name   => 'httpd',
+  }
+  class { '::aodh::wsgi::apache':
+    ssl => false,
+  }
+  class { '::aodh::evaluator':
+    manage_service => false,
+    enabled        => false,
+  }
+  class { '::aodh::notifier':
+    manage_service => false,
+    enabled        => false,
+  }
+  class { '::aodh::listener':
     manage_service => false,
     enabled        => false,
   }
@@ -1216,7 +1250,11 @@ if hiera('step') >= 4 {
                     Pacemaker::Resource::Service["${::neutron::params::dhcp_agent_service}"]],
       }
     }
+<<<<<<< HEAD
+    if !('onos_ml2' in hiera('neutron_mechanism_drivers') or str2bool(hiera('opendaylight_enable_l3', 'no'))) {
+=======
     if !('onos_ml2' in hiera('neutron_mechanism_drivers')) {
+>>>>>>> 0fd1575... Adds current opnfv patch with ODL and ONOS support
       pacemaker::constraint::base { 'neutron-dhcp-agent-to-l3-agent-constraint':
         constraint_type => 'order',
         first_resource  => "${::neutron::params::dhcp_agent_service}-clone",
@@ -1248,7 +1286,11 @@ if hiera('step') >= 4 {
         score   => 'INFINITY',
         require => [Pacemaker::Resource::Service[$::neutron::params::l3_agent_service],
                     Pacemaker::Resource::Service[$::neutron::params::metadata_agent_service]],
+<<<<<<< HEAD
+      }
+=======
      }
+>>>>>>> 0fd1575... Adds current opnfv patch with ODL and ONOS support
     }
     # Nova
     pacemaker::resource::service { $::nova::params::api_service_name :
@@ -1347,7 +1389,7 @@ if hiera('step') >= 4 {
                   Pacemaker::Resource::Service[$::nova::params::conductor_service_name]],
     }
 
-    # Ceilometer
+    # Ceilometer and Aodh
     case downcase(hiera('ceilometer_backend')) {
       /mysql/: {
         pacemaker::resource::service { $::ceilometer::params::agent_central_service_name :
@@ -1375,6 +1417,15 @@ if hiera('step') >= 4 {
     pacemaker::resource::service { $::ceilometer::params::alarm_notifier_service_name :
       clone_params => 'interleave=true',
     }
+    pacemaker::resource::service { $::aodh::params::notifier_service_name :
+      clone_params => 'interleave=true',
+    }
+    pacemaker::resource::service { $::aodh::params::expirer_service_name :
+      clone_params => 'interleave=true',
+    }
+    pacemaker::resource::service { $::aodh::params::listener_service_name :
+      clone_params => 'interleave=true',
+    }
     pacemaker::resource::service { $::ceilometer::params::agent_notification_service_name :
       clone_params => 'interleave=true',
     }
@@ -1386,8 +1437,10 @@ if hiera('step') >= 4 {
     # Fedora doesn't know `require-all` parameter for constraints yet
     if $::operatingsystem == 'Fedora' {
       $redis_ceilometer_constraint_params = undef
+      $redis_aodh_constraint_params = undef
     } else {
       $redis_ceilometer_constraint_params = 'require-all=false'
+      $redis_aodh_constraint_params = 'require-all=false'
     }
     pacemaker::constraint::base { 'redis-then-ceilometer-central-constraint':
       constraint_type   => 'order',
@@ -1398,6 +1451,16 @@ if hiera('step') >= 4 {
       constraint_params => $redis_ceilometer_constraint_params,
       require           => [Pacemaker::Resource::Ocf['redis'],
                             Pacemaker::Resource::Service[$::ceilometer::params::agent_central_service_name]],
+    }
+    pacemaker::constraint::base { 'redis-then-aodh-evaluator-constraint':
+      constraint_type   => 'order',
+      first_resource    => 'redis-master',
+      second_resource   => "${::aodh::params::evaluator_service_name}-clone",
+      first_action      => 'promote',
+      second_action     => 'start',
+      constraint_params => $redis_aodh_constraint_params,
+      require           => [Pacemaker::Resource::Ocf['redis'],
+                            Pacemaker::Resource::Service[$::aodh::params::evaluator_service_name]],
     }
     pacemaker::constraint::base { 'keystone-then-ceilometer-central-constraint':
       constraint_type => 'order',
@@ -1496,6 +1559,38 @@ if hiera('step') >= 4 {
       score   => 'INFINITY',
       require => [Pacemaker::Resource::Service[$::ceilometer::params::agent_notification_service_name],
                   Pacemaker::Resource::Service[$::ceilometer::params::alarm_notifier_service_name]],
+    }
+    pacemaker::constraint::base { 'aodh-delay-then-aodh-evaluator-constraint':
+      constraint_type => 'order',
+      first_resource  => 'delay-clone',
+      second_resource => "${::aodh::params::evaluator_service_name}-clone",
+      first_action    => 'start',
+      second_action   => 'start',
+      require         => [Pacemaker::Resource::Service[$::aodh::params::evaluator_service_name],
+                          Pacemaker::Resource::Ocf['delay']],
+    }
+    pacemaker::constraint::colocation { 'aodh-evaluator-with-aodh-delay-colocation':
+      source  => "${::aodh::params::evaluator_service_name}-clone",
+      target  => 'delay-clone',
+      score   => 'INFINITY',
+      require => [Pacemaker::Resource::Service[$::horizon::params::http_service],
+                  Pacemaker::Resource::Ocf['delay']],
+    }
+    pacemaker::constraint::base { 'aodh-evaluator-then-aodh-notifier-constraint':
+      constraint_type => 'order',
+      first_resource  => "${::aodh::params::evaluator_service_name}-clone",
+      second_resource => "${::aodh::params::notifier_service_name}-clone",
+      first_action    => 'start',
+      second_action   => 'start',
+      require         => [Pacemaker::Resource::Service[$::aodh::params::evaluator_service_name],
+                          Pacemaker::Resource::Service[$::aodh::params::notifier_service_name]],
+    }
+    pacemaker::constraint::colocation { 'aodh-notifier-with-aodh-evaluator-colocation':
+      source  => "${::aodh::params::notifier_service_name}-clone",
+      target  => "${::aodh::params::evaluator_service_name}-clone",
+      score   => 'INFINITY',
+      require => [Pacemaker::Resource::Service[$::aodh::params::evaluator_service_name],
+                  Pacemaker::Resource::Service[$::aodh::params::notifier_service_name]],
     }
     if downcase(hiera('ceilometer_backend')) == 'mongodb' {
       pacemaker::constraint::base { 'mongodb-then-ceilometer-central-constraint':
