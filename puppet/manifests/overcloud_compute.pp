@@ -128,11 +128,34 @@ elsif hiera('neutron::core_plugin') == 'neutron_plugin_contrail.plugins.opencont
   #class {'::contrail::vrouter::provision_vrouter':
   #  require => Class['contrail::vrouter'],
   #}
+
 }
 else {
 
   include ::neutron::plugins::ml2
-  include ::neutron::agents::ml2::ovs
+
+  if 'opendaylight' in hiera('neutron_mechanism_drivers') {
+    if str2bool(hiera('opendaylight_install', 'false')) {
+      $controller_ips = split(hiera('controller_node_ips'), ',')
+      $opendaylight_controller_ip = $controller_ips[0]
+    } else {
+      $opendaylight_controller_ip = hiera('opendaylight_controller_ip')
+    }
+    class { 'neutron::plugins::ovs::opendaylight':
+      odl_controller_ip => $opendaylight_controller_ip,
+      tunnel_ip         => hiera('neutron::agents::ml2::ovs::local_ip'),
+      odl_port          => hiera('opendaylight_port'),
+      odl_username      => hiera('opendaylight_username'),
+      odl_password      => hiera('opendaylight_password'),
+    }
+  } elsif 'onos_ml2' in hiera('neutron_mechanism_drivers') {
+    $controller_ips = split(hiera('controller_node_ips'), ',')
+    class {'onos::ovs_computer':
+      manager_ip => $controller_ips[0]
+    }
+  } else {
+    include ::neutron::agents::ml2::ovs
+  }
 
   if 'cisco_n1kv' in hiera('neutron::plugins::ml2::mechanism_drivers') {
     class { '::neutron::agents::n1kv_vem':
@@ -145,7 +168,6 @@ else {
     include ::neutron::agents::bigswitch
   }
 }
-
 
 include ::ceilometer
 include ::ceilometer::config

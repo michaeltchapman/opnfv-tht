@@ -398,6 +398,21 @@ if hiera('step') >= 2 {
 
   }
 
+  if str2bool(hiera('opendaylight_install', 'false')) {
+    class {"opendaylight":
+      extra_features => any2array(hiera('opendaylight_features', 'odl-ovsdb-openstack')),
+      odl_rest_port  => hiera('opendaylight_port'),
+      enable_l3      => hiera('opendaylight_enable_l3', 'no'),
+    }
+  }
+
+  if 'onos_ml2' in hiera('neutron_mechanism_drivers') {
+    # install onos and config ovs
+    class {"onos":
+      controllers_ip => $controller_node_ips
+    }
+  }
+  
   exec { 'galera-ready' :
     command     => '/usr/bin/clustercheck >/dev/null',
     timeout     => 30,
@@ -666,10 +681,30 @@ if hiera('step') >= 3 {
   }
   else {
     # Neutron class definitions
-    include ::neutron
+    if 'onos_ml2' in hiera('neutron_mechanism_drivers') {
+      # config neutron service_plugins to onos driver
+      class { '::neutron':
+        service_plugins  => [hiera('neutron_service_plugins')]
+      }
+    } else {
+      include ::neutron
+    }
   }
 
-  include ::neutron::config
+  # SDNVPN Hack
+  if ('networking_bgpvpn.neutron.services.plugin.BGPVPNPlugin' in hiera('neutron::service_plugins'))
+  {
+    class  { 'neutron::config':
+      server_config => {
+        'service_providers/service_provider' => {
+          'value' => 'BGPVPN:Dummy:networking_bgpvpn.neutron.services.service_drivers.driver_api.BGPVPNDriver:default'
+        }
+      }
+    }
+  } else {
+    include ::neutron::config
+  }
+
   class { '::neutron::server' :
     sync_db        => $sync_db,
     manage_service => false,
@@ -702,7 +737,7 @@ if hiera('step') >= 3 {
       require => Package['neutron'],
     }
   }
-  if hiera('neutron::enable_l3_agent',true) {
+  if hiera('neutron::enable_l3_agent',true) && ! str2bool(hiera('opendaylight_enable_l3', 'no')) {
     class { '::neutron::agents::l3' :
       manage_service => false,
       enabled        => false,
@@ -715,9 +750,46 @@ if hiera('step') >= 3 {
     }
   }
   include ::neutron::plugins::ml2
-  class { '::neutron::agents::ml2::ovs':
-    manage_service => false,
-    enabled        => false,
+
+  if 'opendaylight' in hiera('neutron_mechanism_drivers') {
+    if str2bool(hiera('opendaylight_install', 'false')) {
+      $controller_ips = split(hiera('controller_node_ips'), ',')
+      $opendaylight_controller_ip = $controller_ips[0]
+    } else {
+      $opendaylight_controller_ip = hiera('opendaylight_controller_ip')
+    }
+
+    class { 'neutron::plugins::ml2::opendaylight':
+      odl_controller_ip => $opendaylight_controller_ip,
+      odl_username      => hiera('opendaylight_username'),
+      odl_password      => hiera('opendaylight_password'),
+      odl_port          => hiera('opendaylight_port'),
+    }
+
+    if str2bool(hiera('opendaylight_install', 'false')) {
+      class { 'neutron::plugins::ovs::opendaylight':
+        odl_controller_ip => $opendaylight_controller_ip,
+        tunnel_ip         => hiera('neutron::agents::ml2::ovs::local_ip'),
+        odl_port          => hiera('opendaylight_port'),
+        odl_username      => hiera('opendaylight_username'),
+        odl_password      => hiera('opendaylight_password'),
+      }
+    }
+  } elsif 'onos_ml2' in hiera('neutron_mechanism_drivers') {
+    #config ml2_conf.ini with onos url address
+    $onos_port = hiera('onos_port')
+
+    neutron_plugin_ml2 {
+      'onos/username':         value => 'admin';
+      'onos/password':         value => 'admin';
+      'onos/url_path':         value => "http://${controller_node_ips[0]}:${onos_port}/onos/vtn";
+    }
+
+  } else {
+    class { 'neutron::agents::ml2::ovs':
+      manage_service   => false,
+      enabled          => false,
+    }
   }
 
   if 'cisco_ucsm' in hiera('neutron::plugins::ml2::mechanism_drivers') {
@@ -745,8 +817,10 @@ if hiera('step') >= 3 {
     include ::neutron::plugins::ml2::bigswitch::restproxy
     include ::neutron::agents::bigswitch
   }
-  neutron_l3_agent_config {
-    'DEFAULT/ovs_use_veth': value => hiera('neutron_ovs_use_veth', false);
+  if !('onos_ml2' in hiera('neutron_mechanism_drivers') or str2bool(hiera('opendaylight_enable_l3', 'no'))) {
+    neutron_l3_agent_config {
+      'DEFAULT/ovs_use_veth': value => hiera('neutron_ovs_use_veth', false);
+    }
   }
   neutron_dhcp_agent_config {
     'DEFAULT/ovs_use_veth': value => hiera('neutron_ovs_use_veth', false);
@@ -1271,8 +1345,10 @@ if hiera('step') >= 4 {
       }
     }
     if hiera('neutron::enable_l3_agent', true) {
-      pacemaker::resource::service { $::neutron::params::l3_agent_service:
-        clone_params => 'interleave=true',
+      if !('onos_ml2' in hiera('neutron_mechanism_drivers')) {
+        pacemaker::resource::service { $::neutron::params::l3_agent_service:
+          clone_params => 'interleave=true',
+        }
       }
     }
     if hiera('neutron::enable_dhcp_agent', true) {
@@ -1379,21 +1455,23 @@ if hiera('step') >= 4 {
       }
     }
     if hiera('neutron::enable_dhcp_agent',true) and hiera('l3_agent_service',true) {
-      pacemaker::constraint::base { 'neutron-dhcp-agent-to-l3-agent-constraint':
-        constraint_type => 'order',
-        first_resource  => "${::neutron::params::dhcp_agent_service}-clone",
-        second_resource => "${::neutron::params::l3_agent_service}-clone",
-        first_action    => 'start',
-        second_action   => 'start',
-        require         => [Pacemaker::Resource::Service[$::neutron::params::dhcp_agent_service],
-                            Pacemaker::Resource::Service[$::neutron::params::l3_agent_service]]
-      }
-      pacemaker::constraint::colocation { 'neutron-dhcp-agent-to-l3-agent-colocation':
-        source  => "${::neutron::params::l3_agent_service}-clone",
-        target  => "${::neutron::params::dhcp_agent_service}-clone",
-        score   => 'INFINITY',
-        require => [Pacemaker::Resource::Service[$::neutron::params::dhcp_agent_service],
-                    Pacemaker::Resource::Service[$::neutron::params::l3_agent_service]]
+      if !('onos_ml2' in hiera('neutron_mechanism_drivers') or str2bool(hiera('opendaylight_enable_l3', 'no'))) {
+        pacemaker::constraint::base { 'neutron-dhcp-agent-to-l3-agent-constraint':
+          constraint_type => 'order',
+          first_resource  => "${::neutron::params::dhcp_agent_service}-clone",
+          second_resource => "${::neutron::params::l3_agent_service}-clone  ",
+          first_action    => 'start',
+          second_action   => 'start',
+          require         => [Pacemaker::Resource::Service[$::neutron::params::dhcp_agent_service],
+                              Pacemaker::Resource::Service[$::neutron::params::l3_agent_service]],
+        }
+        pacemaker::constraint::colocation { 'neutron-dhcp-agent-to-l3-agent-colocation':
+          source  => "${::neutron::params::l3_agent_service}-clone",
+          target  => "${::neutron::params::dhcp_agent_service}-clone",
+          score   => 'INFINITY',
+          require => [Pacemaker::Resource::Service[$::neutron::params::dhcp_agent_service],
+                      Pacemaker::Resource::Service[$::neutron::params::l3_agent_service]]
+        }
       }
     }
     if hiera('neutron::enable_l3_agent',true) and hiera('neutron::enable_metadata_agent',true) {
@@ -1451,7 +1529,6 @@ if hiera('step') >= 4 {
                     Pacemaker::Resource::Service[$::neutron::params::metadata_agent_service]],
       }
     }
-
     # Nova
     pacemaker::resource::service { $::nova::params::api_service_name :
       clone_params => 'interleave=true',

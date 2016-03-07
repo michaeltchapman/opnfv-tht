@@ -237,6 +237,23 @@ parameters:
     default: ''
     description: Comma-separated list of ntp servers
     type: comma_delimited_list
+  OpenDaylightPort:
+    default: 8081
+    description: Set opendaylight service port
+    type: number
+  OpenDaylightUsername:
+    default: 'admin'
+    description: The username for the opendaylight server.
+    type: string
+  OpenDaylightPassword:
+    default: 'admin'
+    type: string
+    description: The password for the opendaylight server.
+    hidden: true
+  ONOSPort:
+    default: 8181
+    description: Set onos service port
+    type: number
   RabbitHost:
     type: string
     default: ''  # Has to be here because of the ignored empty value bug
@@ -517,6 +534,10 @@ resources:
                 neutron::rabbit_use_ssl: {get_input: rabbit_client_use_ssl}
                 neutron::rabbit_port: {get_input: rabbit_client_port}
                 neutron::plugins::ml2::flat_networks: {get_input: neutron_flat_networks}
+                opendaylight_port: {get_input: opendaylight_port}
+                opendaylight_username: {get_input: opendaylight_username}
+                opendaylight_password: {get_input: opendaylight_password}
+                onos_port: {get_input: onos_port}
                 neutron_host: {get_input: neutron_host}
                 neutron::agents::ml2::ovs::local_ip: {get_input: neutron_local_ip}
 
@@ -587,6 +608,10 @@ resources:
             template: NETWORKS
             params:
               NETWORKS: {get_param: NeutronFlatNetworks}
+        opendaylight_port: {get_param: OpenDaylightPort}
+        opendaylight_username: {get_param: OpenDaylightUsername}
+        opendaylight_password: {get_param: OpenDaylightPassword}
+        onos_port: {get_param: ONOSPort}
         neutron_host: {get_param: NeutronHost}
         neutron_local_ip: {get_attr: [NetIpMap, net_ip_map, {get_param: [ServiceNetMap, NeutronTenantNetwork]}]}
         neutron_tunnel_id_ranges:

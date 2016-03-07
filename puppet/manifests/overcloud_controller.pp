@@ -37,6 +37,21 @@ if hiera('step') >= 1 {
 
 if hiera('step') >= 2 {
 
+  if str2bool(hiera('opendaylight_install', 'false')) {
+    class {"opendaylight":
+      extra_features => any2array(hiera('opendaylight_features', 'odl-ovsdb-openstack')),
+      odl_rest_port  => hiera('opendaylight_port'),
+      enable_l3      => hiera('opendaylight_enable_l3', 'no'),
+    }
+  }
+  
+  if 'onos_ml2' in hiera('neutron_mechanism_drivers') {
+    # install onos and config ovs
+    class {"onos":
+      controllers_ip => $controller_node_ips
+    }
+  }
+
   if count(hiera('ntp::servers')) > 0 {
     include ::ntp
   }
@@ -177,6 +192,9 @@ if hiera('step') >= 2 {
 
 if hiera('step') >= 3 {
 
+  # Apache
+  include ::apache
+
   include ::keystone
   include ::keystone::config
   include ::keystone::roles::admin
@@ -249,6 +267,7 @@ if hiera('step') >= 3 {
   include ::nova::scheduler
   include ::nova::scheduler::filter
 
+  include ::neutron::server
   if hiera('neutron::core_plugin') == 'midonet.neutron.plugin_v1.MidonetPluginV2' {
 
     # TODO(devvesa) provide non-controller ips for these services
@@ -296,9 +315,15 @@ if hiera('step') >= 3 {
 
   }
   else {
-
-    # ML2 plugin
-    include ::neutron
+    if 'onos_ml2' in hiera('neutron_mechanism_drivers') {
+      # config neutron service_plugins to onos driver
+      class { '::neutron':
+        service_plugins  => [hiera('neutron_service_plugins')]
+      }
+    } else {
+      include ::neutron
+      }
+    }
   }
 
   include ::neutron::config
@@ -313,9 +338,20 @@ if hiera('step') >= 3 {
   } elsif hiera('neutron::core_plugin') == 'neutron_plugin_contrail.plugins.opencontrail.contrail_plugin.NeutronPluginContrailCoreV2' {
     include ::neutron::plugins::opencontrail
   } else {
-    include ::neutron::agents::l3
+    if 'opendaylight' in hiera('neutron_mechanism_drivers') {
+      if ! str2bool(hiera('opendaylight_enable_l3', 'no')) {
+        include ::neutron::agents::l3
+        Service['neutron-server'] -> Service['neutron-l3']
+      }
+    } else {
+      include ::neutron::agents::l3
+      Service['neutron-server'] -> Service['neutron-l3']
+    }
+
     include ::neutron::agents::dhcp
     include ::neutron::agents::metadata
+    Service['neutron-server'] -> Service['neutron-dhcp-service']
+    Service['neutron-server'] -> Service['neutron-metadata']
 
     file { '/etc/neutron/dnsmasq-neutron.conf':
       content => hiera('neutron_dnsmasq_options'),
@@ -337,7 +373,76 @@ if hiera('step') >= 3 {
     } else {
 
       include ::neutron::plugins::ml2
-      include ::neutron::agents::ml2::ovs
+
+      if 'opendaylight' in hiera('neutron_mechanism_drivers') {
+        if ! str2bool(hiera('opendaylight_enable_l3', 'no')) {
+          Service['neutron-server'] -> Service['neutron-l3']
+        }
+
+        if str2bool(hiera('opendaylight_install', 'false')) {
+          $controller_ips = split(hiera('controller_node_ips'), ',')
+          $opendaylight_controller_ip = $controller_ips[0]
+        } else {
+          $opendaylight_controller_ip = hiera('opendaylight_controller_ip')
+        }
+
+        # co-existence hacks for SFC
+        if hiera('opendaylight_features', 'odl-ovsdb-openstack') =~ /odl-ovsdb-sfc-rest/ {
+          $opendaylight_port = hiera('opendaylight_port')
+          $netvirt_coexist_url = "http://${opendaylight_controller_ip}:${opendaylight_port}/restconf/config/netvirt-providers-config:netvirt-providers-config"
+          $netvirt_post_body = "{'netvirt-providers-config': {'table-offset': 1}}"
+          $sfc_coexist_url = "http://${opendaylight_controller_ip}:${opendaylight_port}/restconf/config/sfc-of-renderer:sfc-of-renderer-config"
+          $sfc_post_body = "{ 'sfc-of-renderer-config' : { 'sfc-of-table-offset' : 150, 'sfc-of-app-egress-table-offset' : 11 }}"
+          $odl_username = hiera('opendaylight_username')
+          $odl_password = hiera('opendaylight_password')
+          exec { 'Coexistence table offsets for netvirt':
+            command   => "curl -o /dev/null --fail --silent -u ${odl_username}:${odl_password} ${netvirt_coexist_url} -i -H 'Content-Type: application/json' --data \'${netvirt_post_body}\' -X PUT",
+            tries     => 5,
+            try_sleep => 30,
+            path      => '/usr/sbin:/usr/bin:/sbin:/bin',
+          } ->
+          # Coexist for SFC
+          exec { 'Coexistence table offsets for sfc':
+            command   => "curl -o /dev/null --fail --silent -u ${odl_username}:${odl_password} ${sfc_coexist_url} -i -H 'Content-Type: application/json' --data \'${sfc_post_body}\' -X PUT",
+            tries     => 5,
+            try_sleep => 30,
+            path      => '/usr/sbin:/usr/bin:/sbin:/bin',
+          }
+        }
+
+        class { 'neutron::plugins::ml2::opendaylight':
+          odl_controller_ip => $opendaylight_controller_ip,
+          odl_username      => hiera('opendaylight_username'),
+          odl_password      => hiera('opendaylight_password'),
+          odl_port          => hiera('opendaylight_port'),
+        }
+
+        if str2bool(hiera('opendaylight_install', 'false')) {
+          class { 'neutron::plugins::ovs::opendaylight':
+            odl_controller_ip => $opendaylight_controller_ip,
+            tunnel_ip         => hiera('neutron::agents::ml2::ovs::local_ip'),
+            odl_port          => hiera('opendaylight_port'),
+            odl_username      => hiera('opendaylight_username'),
+            odl_password      => hiera('opendaylight_password'),
+          }
+        }
+
+      } elsif 'onos_ml2' in hiera('neutron_mechanism_drivers') {
+        #config ml2_conf.ini with onos url address
+        $onos_port = hiera('onos_port')
+        $private_ip = hiera('neutron::agents::ml2::ovs::local_ip')
+
+        neutron_plugin_ml2 {
+          'onos/username':         value => 'admin';
+          'onos/password':         value => 'admin';
+          'onos/url_path':         value => "http://${controller_node_ips[0]}:${onos_port}/onos/vtn";
+        }
+
+      } else {
+        include ::neutron::agents::ml2::ovs
+        Service['neutron-server'] -> Service['neutron-ovs-agent-service']
+      }
+
 
       if 'cisco_n1kv' in hiera('neutron::plugins::ml2::mechanism_drivers') {
         include ::neutron::plugins::ml2::cisco::nexus1000v
@@ -372,13 +477,9 @@ if hiera('step') >= 3 {
       neutron_dhcp_agent_config {
         'DEFAULT/ovs_use_veth': value => hiera('neutron_ovs_use_veth', false);
       }
-      Service['neutron-server'] -> Service['neutron-ovs-agent-service']
     }
-
-    Service['neutron-server'] -> Service['neutron-dhcp-service']
-    Service['neutron-server'] -> Service['neutron-l3']
-    Service['neutron-server'] -> Service['neutron-metadata']
   }
+
 
   include ::cinder
   include ::cinder::config
