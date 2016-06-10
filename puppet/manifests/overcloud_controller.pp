@@ -19,7 +19,23 @@ include ::tripleo::firewall
 $enable_load_balancer = hiera('enable_load_balancer', true)
 
 if hiera('step') >= 1 {
+  exec { 'collect-directory-move-rrd':
+    command => "systemctl stop collectd && mv -f /var/lib/collectd/rrd/localhost/* /var/lib/collectd/rrd/$::fqdn",
+    creates => "/var/lib/collectd/rrd/$::fqdn",
+    path    => '/usr/bin:/usr/sbin'
+  } ~>
 
+  # CSV is only used in debug builds
+  exec { 'collect-directory-move-csv':
+    command => "mv -f /var/lib/collectd/csv/localhost/* /var/lib/collectd/csv/$::fqdn",
+    creates => '/var/lib/collectd/csv/$::fqdn',
+    onlyif  => 'test -d /var/lib/collectd/csv',
+    path    => '/usr/bin:/usr/sbin'
+  } ~>
+
+  service { 'collectd':
+    ensure => 'running'
+  }
   create_resources(kmod::load, hiera('kernel_modules'), {})
   create_resources(sysctl::value, hiera('sysctl_settings'), {})
   Exec <| tag == 'kmod::load' |>  -> Sysctl <| |>

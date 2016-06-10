@@ -20,6 +20,12 @@ create_resources(kmod::load, hiera('kernel_modules'), {})
 create_resources(sysctl::value, hiera('sysctl_settings'), {})
 Exec <| tag == 'kmod::load' |>  -> Sysctl <| |>
 
+exec { 'collect-restart-once':
+  command => 'systemctl restart collectd && touch /root/.collectdconf',
+  creates => '/root/.collectdconf',
+  path    => '/usr/bin:/usr/sbin'
+}
+
 if count(hiera('ntp::servers')) > 0 {
   include ::ntp
 }

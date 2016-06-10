@@ -56,6 +56,25 @@ $enable_load_balancer = hiera('enable_load_balancer', true)
 $non_pcmk_start = hiera('step') >= 4
 
 if hiera('step') >= 1 {
+  # The hostname is localhost on boot, so metrics go into localhost
+  # instead of where we actually want them.
+  exec { 'collect-directory-move-rrd':
+    command => "systemctl stop collectd && mv -f /var/lib/collectd/rrd/localhost /var/lib/collectd/rrd/$::fqdn",
+    creates => "/var/lib/collectd/rrd/$::fqdn",
+    path    => '/usr/bin:/usr/sbin'
+  } ~>
+
+  # CSV is only used in debug builds
+  exec { 'collect-directory-move-csv':
+    command => "mv -f /var/lib/collectd/csv/localhost /var/lib/collectd/csv/$::fqdn",
+    creates => '/var/lib/collectd/csv/$::fqdn',
+    onlyif  => 'test -d /var/lib/collectd/csv/localhost',
+    path    => '/usr/bin:/usr/sbin'
+  } ~>
+
+  service { 'collectd':
+    ensure => 'running'
+  }
 
   create_resources(kmod::load, hiera('kernel_modules'), {})
   create_resources(sysctl::value, hiera('sysctl_settings'), {})

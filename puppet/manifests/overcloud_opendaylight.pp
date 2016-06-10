@@ -15,6 +15,12 @@
 
 include ::tripleo::packages
 
+exec { 'collect-restart-once':
+  command => 'systemctl restart collectd && touch /root/.collectdconf',
+  creates => '/root/.collectdconf',
+  path    => '/usr/bin:/usr/sbin'
+}
+
 if count(hiera('ntp::servers')) > 0 {
   include ::ntp
 }
