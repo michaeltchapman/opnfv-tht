@@ -503,16 +503,18 @@ if hiera('step') >= 2 {
     }
 
     pacemaker::resource::service { $::memcached::params::service_name :
-      clone_params => 'interleave=true',
-      require      => Class['::memcached'],
+      clone_params       => 'interleave=true',
+      post_success_sleep => 15,
+      require            => Class['::memcached'],
     }
 
     pacemaker::resource::ocf { 'rabbitmq':
-      ocf_agent_name  => 'heartbeat:rabbitmq-cluster',
-      resource_params => 'set_policy=\'ha-all ^(?!amq\.).* {"ha-mode":"all"}\'',
-      clone_params    => 'ordered=true interleave=true',
-      meta_params     => 'notify=true',
-      require         => Class['::rabbitmq'],
+      ocf_agent_name     => 'heartbeat:rabbitmq-cluster',
+      resource_params    => 'set_policy=\'ha-all ^(?!amq\.).* {"ha-mode":"all"}\'',
+      clone_params       => 'ordered=true interleave=true',
+      meta_params        => 'notify=true',
+      post_success_sleep => 15,
+      require            => Class['::rabbitmq'],
     }
 
     if downcase(hiera('ceilometer_backend')) == 'mongodb' {
@@ -536,11 +538,12 @@ if hiera('step') >= 2 {
 
 
     pacemaker::resource::ocf { 'redis':
-      ocf_agent_name  => 'heartbeat:redis',
-      master_params   => '',
-      meta_params     => 'notify=true ordered=true interleave=true',
-      resource_params => 'wait_last_known_master=true',
-      require         => Class['::redis'],
+      ocf_agent_name     => 'heartbeat:redis',
+      master_params      => '',
+      meta_params        => 'notify=true ordered=true interleave=true',
+      resource_params    => 'wait_last_known_master=true',
+      require            => Class['::redis'],
+      post_success_sleep => 15,
     }
 
   }
@@ -597,9 +600,14 @@ MYSQL_HOST=localhost\n",
     require        => File['/etc/sysconfig/clustercheck'],
   }
 
+  exec { 'pcs_cleanup_1':
+    command => "sleep 10; for i in $(pcs status | grep '^* ' | cut -d ' ' -f 2 | cut -d '_' -f 1 | uniq); do pcs resource cleanup $i; done",
+    provider => shell,
+    require => Exec['galera-ready'],
+    path     => '/usr/bin:/bin:/usr/sbin:/sbin'
+  } ->
   exec { 'sql-sleep':
     command => "sleep 240 && echo 'SQL Sleep complete'",
-    require => Exec['galera-ready'],
     path => "/usr/bin:/bin",
   }
 
@@ -2225,6 +2233,13 @@ if hiera('step') >= 4 {
 if hiera('step') >= 5 {
 
   if $pacemaker_master {
+
+    exec { 'pcs_cleanup_2':
+      command => "sleep 10; for i in $(pcs status | grep '^* ' | cut -d ' ' -f 2 | cut -d '_' -f 1 | uniq); do pcs resource cleanup $i; done; sleep 10",
+      provider => shell,
+      require => Exec['galera-ready'],
+      path     => '/usr/bin:/bin:/usr/sbin:/sbin'
+    } ->
 
     class {'::keystone::roles::admin' :
       require => Pacemaker::Resource::Service[$::apache::params::service_name],
